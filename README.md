@@ -211,6 +211,31 @@ python3 benchmark/load_test.py
 The rate limit override matters. The default 6000/min is 100 req/s, so without
 it you are benchmarking the rate limiter.
 
+### Against a deployment
+
+```bash
+python3 benchmark/load_test.py \
+  --base-url https://your-app.up.railway.app \
+  --api-key  st_...            \
+  --admin-token "$ADMIN_TOKEN" \
+  --phase query
+```
+
+Counts come through the query API rather than SQL, so no database access is
+needed. Three caveats:
+
+- **Use a dedicated benchmark organization.** Events land in the real table
+  under whichever key you supply, and there is no delete endpoint, so cleaning
+  up means going to the database directly.
+- **Raise `RATE_LIMIT_PER_MINUTE` first**, or you measure the limiter. The
+  script warns when it sees 429s rather than reporting the ceiling as capacity.
+- **Remote latency is mostly your own network.** `--phase ping` measures the
+  same path doing nothing, so subtract it. Throughput and consumer lag survive
+  the trip; latency percentiles do not.
+
+The outage phase refuses to run against a remote host, because it works by
+stopping Postgres.
+
 Measured locally on an M-series laptop against containerised Postgres and Kafka.
 Ratios transfer between machines; absolute numbers do not.
 
