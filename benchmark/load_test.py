@@ -315,17 +315,39 @@ def phase_outage(seconds):
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default="http://localhost:8080")
-    ap.add_argument("--api-key", default="st_dev_local_key_not_for_production")
-    ap.add_argument("--admin-token", default="local-dev-admin-token")
+    ap = argparse.ArgumentParser(
+        description="Benchmark Statistra against a local stack or a deployment.",
+        epilog=(
+            "Phases:\n"
+            "  baseline    network round trip, and app-to-database round trip.\n"
+            "              Run this first: it tells you whether anything else is\n"
+            "              worth reading. ('ping' is accepted as an old alias.)\n"
+            "  throughput  peak batch ingest, and how far acceptance outruns\n"
+            "              persistence. The gap is what Kafka is buying.\n"
+            "  latency     single-event POSTs, the shape a real client produces.\n"
+            "  query       read-side cost at the volume already stored.\n"
+            "  outage      stops Postgres mid-ingest. Local only.\n"
+            "  all         every phase above, in that order (default).\n"),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--base-url", default="http://localhost:8080",
+                    help="Where to point. Defaults to the local stack.")
+    ap.add_argument("--api-key", default="st_dev_local_key_not_for_production",
+                    help="Tenant key events are sent under. Use a benchmark org, not a live tenant.")
+    ap.add_argument("--admin-token", default="local-dev-admin-token",
+                    help="Needed to read consumer lag from /actuator/prometheus.")
     ap.add_argument("--phase", default="all",
-                    choices=["all", "ping", "throughput", "latency", "query", "outage"])
-    ap.add_argument("--batch", type=int, default=500)
-    ap.add_argument("--batches", type=int, default=40)
-    ap.add_argument("--events", type=int, default=2000, help="single-event POSTs")
-    ap.add_argument("--connections", type=int, default=8)
-    ap.add_argument("--outage-seconds", type=int, default=40)
+                    choices=["all", "baseline", "ping", "throughput", "latency", "query", "outage"],
+                    help="Which phase to run. See the list below. Default: all.")
+    ap.add_argument("--batch", type=int, default=500,
+                    help="Events per batch request in the throughput phase.")
+    ap.add_argument("--batches", type=int, default=40,
+                    help="Number of batch requests in the throughput phase.")
+    ap.add_argument("--events", type=int, default=2000,
+                    help="Single-event POSTs in the latency phase.")
+    ap.add_argument("--connections", type=int, default=8,
+                    help="Concurrent connections used to drive load.")
+    ap.add_argument("--outage-seconds", type=int, default=40,
+                    help="How long to keep Postgres stopped in the outage phase.")
     a = ap.parse_args()
 
     CFG["base"] = a.base_url.rstrip("/")
@@ -348,7 +370,7 @@ if __name__ == "__main__":
         print("Remote run. Events land in the real table under this key, and latency")
         print("includes your network round trip. Use a dedicated benchmark org.")
 
-    if a.phase in ("all", "ping"):
+    if a.phase in ("all", "baseline", "ping"):
         phase_ping()
     if a.phase in ("all", "throughput"):
         phase_throughput(a.batch, a.batches, a.connections)
