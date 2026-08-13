@@ -11,6 +11,7 @@ public class StatistraProperties {
     private final Kafka kafka = new Kafka();
     private final Admin admin = new Admin();
     private final Ingest ingest = new Ingest();
+    private final Auth auth = new Auth();
 
     /** Whether to insert the fixed development organization on startup. */
     private boolean seedDevOrg = false;
@@ -25,6 +26,10 @@ public class StatistraProperties {
 
     public Ingest getIngest() {
         return ingest;
+    }
+
+    public Auth getAuth() {
+        return auth;
     }
 
     public boolean isSeedDevOrg() {
@@ -80,6 +85,36 @@ public class StatistraProperties {
 
         public void setToken(String token) {
             this.token = token;
+        }
+    }
+
+    public static class Auth {
+
+        /**
+         * How long an API key lookup is cached. The trade is bounded staleness
+         * against keeping the database off the ingest path: a rotated key stays
+         * usable for up to this long on instances that did not perform the
+         * rotation. Zero disables caching.
+         */
+        private java.time.Duration cacheTtl = java.time.Duration.ofSeconds(60);
+
+        /** Bounded so that caching misses cannot become a memory-exhaustion vector. */
+        private long cacheMaxEntries = 10_000;
+
+        public java.time.Duration getCacheTtl() {
+            return cacheTtl;
+        }
+
+        public void setCacheTtl(java.time.Duration cacheTtl) {
+            this.cacheTtl = cacheTtl;
+        }
+
+        public long getCacheMaxEntries() {
+            return cacheMaxEntries;
+        }
+
+        public void setCacheMaxEntries(long cacheMaxEntries) {
+            this.cacheMaxEntries = cacheMaxEntries;
         }
     }
 

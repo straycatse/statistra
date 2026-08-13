@@ -120,6 +120,13 @@ class AuthIntegrationTest {
         Long id = ((Number) created.getBody().get("id")).longValue();
         String originalKey = (String) created.getBody().get("apiKey");
 
+        // Use the key first, so its lookup is cached. Without this the test has
+        // no teeth: an uncached key is re-read from the database on the next
+        // request and would appear revoked even if eviction were broken.
+        assertThat(rest.exchange("/api/v1/events", HttpMethod.POST,
+                entity(Map.of("eventType", "before_rotation"), originalKey), Map.class)
+                .getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+
         ResponseEntity<Map> rotated = rest.exchange("/admin/organizations/" + id + "/rotate-key",
                 HttpMethod.POST, adminEntity(null), Map.class);
         String newKey = (String) rotated.getBody().get("apiKey");

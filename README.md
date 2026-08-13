@@ -152,6 +152,7 @@ Every value is environment-overridable and nothing sensitive is committed.
 | `SPRING_DATASOURCE_USERNAME` / `_PASSWORD` | `postgres` | Credentials |
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Broker |
 | `ADMIN_TOKEN` | *(unset)* | Admin API and non-probe Actuator token; unset disables both |
+| `AUTH_CACHE_TTL` | `60s` | API key lookup cache; `0s` disables it |
 | `MAX_BODY_BYTES` | `1048576` | Ingest body ceiling |
 | `MAX_BATCH_SIZE` | `500` | Events per batch request |
 | `RATE_LIMIT_PER_MINUTE` | `6000` | Ingest requests per org per minute |
@@ -190,6 +191,43 @@ Set `ADMIN_TOKEN` to a generated secret. Do not set `SPRING_PROFILES_ACTIVE=loca
 
 Keep `numReplicas = 1` until rate-limit state moves out of memory: the limiter
 counts per instance, so N replicas allow N times the configured rate.
+
+## Benchmarking
+
+Correctness under load is asserted in `PipelineUnderLoadTest` and runs in CI on
+every push. It makes no timing assertions: shared runners vary by several times
+between runs, and a suite that fails for reasons unrelated to the code is a
+suite people learn to ignore. It asserts invariants that hold at any speed, that
+every accepted event is persisted exactly once and that the counters reconcile.
+
+Throughput is measured separately and deliberately, never gated on:
+
+```bash
+docker compose up -d
+RATE_LIMIT_PER_MINUTE=10000000 ./gradlew bootRun --args='--spring.profiles.active=local'
+python3 benchmark/load_test.py
+```
+
+The rate limit override matters. The default 6000/min is 100 req/s, so without
+it you are benchmarking the rate limiter.
+
+Measured locally on an M-series laptop against containerised Postgres and Kafka.
+Ratios transfer between machines; absolute numbers do not.
+
+| | |
+|---|---|
+| Batch ingest accepted | 62,600 events/s |
+| Persisted end to end | 7,200 events/s |
+| Peak consumer backlog absorbed | 15,200 records |
+| Single-event ingest | 4,400 req/s, p50 1.3 ms, p99 8.6 ms |
+
+The gap between accepted and persisted is what Kafka buys: a burst Postgres
+could not have taken synchronously. `benchmark/load_test.py --phase outage`
+stops Postgres mid-ingest and is the test that justifies the broker at all.
+
+`kafka_consumer_fetch_manager_records_lag_max` is the number to watch in
+production. Spiking and recovering is healthy; trending upward means the
+consumer is losing.
 
 ## Tests
 

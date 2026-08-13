@@ -2,7 +2,6 @@ package com.straycat.statistra.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.straycat.statistra.entity.Organization;
-import com.straycat.statistra.repository.OrganizationRepository;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -35,11 +34,11 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     private static final String HEADER = "X-API-Key";
     private static final Logger log = LoggerFactory.getLogger(ApiKeyAuthFilter.class);
 
-    private final OrganizationRepository organizationRepository;
+    private final ApiKeyCache apiKeyCache;
     private final ObjectMapper objectMapper;
 
-    public ApiKeyAuthFilter(OrganizationRepository organizationRepository, ObjectMapper objectMapper) {
-        this.organizationRepository = organizationRepository;
+    public ApiKeyAuthFilter(ApiKeyCache apiKeyCache, ObjectMapper objectMapper) {
+        this.apiKeyCache = apiKeyCache;
         this.objectMapper = objectMapper;
     }
 
@@ -61,8 +60,11 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             return;
         }
 
-        Optional<Organization> organization =
-                organizationRepository.findByApiKeyHash(ApiKeys.hash(apiKey.trim()));
+        // Goes through the cache rather than straight to the repository. A
+        // per-request database read here meant a Postgres outage took ingest
+        // down with it, even though Kafka was healthy and could have buffered
+        // every event. See ApiKeyCache for the staleness trade that buys.
+        Optional<Organization> organization = apiKeyCache.lookup(ApiKeys.hash(apiKey.trim()));
 
         if (organization.isEmpty()) {
             // Log the prefix only. Logging the key itself would put a live

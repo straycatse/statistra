@@ -3,6 +3,7 @@ package com.straycat.statistra.service;
 import com.straycat.statistra.dto.OrganizationCreatedResponse;
 import com.straycat.statistra.entity.Organization;
 import com.straycat.statistra.repository.OrganizationRepository;
+import com.straycat.statistra.security.ApiKeyCache;
 import com.straycat.statistra.security.ApiKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,9 +16,12 @@ public class OrganizationService {
     private static final Logger log = LoggerFactory.getLogger(OrganizationService.class);
 
     private final OrganizationRepository organizationRepository;
+    private final ApiKeyCache apiKeyCache;
 
-    public OrganizationService(OrganizationRepository organizationRepository) {
+    public OrganizationService(OrganizationRepository organizationRepository,
+                               ApiKeyCache apiKeyCache) {
         this.organizationRepository = organizationRepository;
+        this.apiKeyCache = apiKeyCache;
     }
 
     /**
@@ -45,9 +49,15 @@ public class OrganizationService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "No organization with id " + organizationId));
 
+        String previousHash = organization.getApiKeyHash();
         String apiKey = ApiKeys.generate();
         organization.setApiKeyHash(ApiKeys.hash(apiKey));
         organization.setApiKeyPrefix(ApiKeys.displayPrefix(apiKey));
+
+        // Without this the revoked key would keep authenticating until its
+        // cache entry expired. Immediate only on this instance; others wait out
+        // the TTL, which is why the TTL is kept short.
+        apiKeyCache.evict(previousHash);
 
         log.info("Rotated API key for organization id={}", organizationId);
         return new OrganizationCreatedResponse(

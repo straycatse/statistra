@@ -33,6 +33,11 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.kafka:spring-kafka'
 
+    // Backs the API key lookup cache. Without it every ingest request made a
+    // synchronous Postgres read just to authenticate, which put the database on
+    // the critical path of the one endpoint Kafka exists to keep off it.
+    implementation 'com.github.ben-manes.caffeine:caffeine'
+
     implementation 'org.flywaydb:flyway-core'
     runtimeOnly 'org.flywaydb:flyway-database-postgresql'
     runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
