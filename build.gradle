@@ -17,22 +17,66 @@ repositories {
     mavenCentral()
 }
 
+// Overrides the Testcontainers version Boot 3.4 manages (1.20.4), whose bundled
+// docker-java cannot negotiate with Docker Engine 29 and fails container
+// startup. This has to be an `ext` property rather than a Gradle platform
+// constraint: the io.spring.dependency-management plugin resolves its BOM last
+// and would otherwise pull the version straight back down. Drop it once the
+// Boot BOM ships a version that works with Engine 29.
+ext['testcontainers.version'] = '1.21.3'
+
 dependencies {
-    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.springframework.kafka:spring-kafka'
-    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
+    implementation 'org.flywaydb:flyway-core'
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
     runtimeOnly 'org.postgresql:postgresql'
+
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
     testImplementation 'org.springframework.kafka:spring-kafka-test'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+    testImplementation 'org.testcontainers:kafka'
+    // Ingest is asynchronous, so assertions on persisted state have to poll.
+    testImplementation 'org.awaitility:awaitility'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-    implementation 'jakarta.validation:jakarta.validation-api:3.0.2'
-    implementation 'org.hibernate.validator:hibernate-validator:8.0.1.Final'
-    implementation 'org.glassfish:jakarta.el:4.0.2'
-    implementation 'org.postgresql:postgresql'
-    implementation "com.vladmihalcea:hibernate-types-60:2.21.1"
+}
+
+// Fixed artifact name so the Dockerfile does not have to glob for a
+// version-stamped jar.
+tasks.named('bootJar') {
+    archiveFileName = 'statistra.jar'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+
+    // Docker Engine 29 raised its minimum API version to 1.40 and rejects
+    // anything older with HTTP 400. DockerClientProviderStrategy falls back to
+    // a hardcoded RemoteApiVersion.VERSION_1_32 whenever no version is
+    // configured, so every connection probe fails and Testcontainers reports
+    // the thoroughly misleading "Could not find a valid Docker environment"
+    // while the daemon is running and reachable.
+    //
+    // The shaded docker-java config reads this as a system property; the
+    // DOCKER_API_VERSION environment variable is not consulted on this path.
+    // 1.44 ships with Docker 25 (2024), comfortably old enough for CI.
+    systemProperty 'api.version', '1.44'
+
+    // Deliberately not UTC. Time bucketing must not depend on the server's
+    // clock zone, and pgjdbc sets the Postgres session TimeZone from the JVM
+    // default, so a UTC test JVM makes that class of bug invisible: the wrong
+    // code and the right code agree. CI runners are UTC, so without this the
+    // suite would have been blind to it. The offset is deliberately not a whole
+    // number of hours, which also catches half-hour-zone assumptions.
+    systemProperty 'user.timezone', 'Asia/Kolkata'
 }

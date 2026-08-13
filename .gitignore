@@ -1,6 +1,11 @@
 HELP.md
 .gradle
 build/
+
+### Local artifacts ###
+firebase-debug.log
+*.log
+.env
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/

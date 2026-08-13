@@ -1,122 +1,80 @@
 package com.straycat.statistra.config;
 
-/*
 import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.serialization.StringSerializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.annotation.EnableKafka;
-import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
-import org.springframework.kafka.core.DefaultKafkaProducerFactory;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.config.TopicBuilder;
+import org.springframework.kafka.core.KafkaOperations;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.util.backoff.ExponentialBackOff;
 
-import java.util.HashMap;
-import java.util.Map;
-
+/**
+ * Kafka wiring.
+ *
+ * <p>Note what is <em>not</em> here: no broker address, no serializer classes, no
+ * consumer group. Those all live in {@code application.properties} under
+ * {@code spring.kafka.*} and are read by Boot's auto-configuration. The previous
+ * version declared its own producer and consumer factories with a hardcoded
+ * {@code localhost:9092}, which both prevented deployment anywhere else and
+ * silently made every {@code spring.kafka.*} property dead config.
+ *
+ * <p>What remains is only what auto-configuration cannot infer: topic creation
+ * and the error handling policy.
+ */
 @Configuration
 @EnableKafka
 public class KafkaConfig {
 
-    @Bean
-    public Map<String, Object> producerConfigs() {
-        Map<String, Object> props = new HashMap<>();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        return props;
+    private static final Logger log = LoggerFactory.getLogger(KafkaConfig.class);
+
+    private final StatistraProperties properties;
+
+    public KafkaConfig(StatistraProperties properties) {
+        this.properties = properties;
     }
 
-    @Bean
-    public ProducerFactory<String, String> producerFactory() {
-        return new DefaultKafkaProducerFactory<>(producerConfigs());
-    }
-
-    @Bean
-    public KafkaTemplate<String, String> kafkaTemplate() {
-        return new KafkaTemplate<>(producerFactory());
-    }
-
-    @Bean(name = "analyticsKafkaListenerContainerFactory")
-    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(consumerFactory());
-        return factory;
-    }
-
-    @Bean
-    public DefaultKafkaConsumerFactory<String, String> consumerFactory() {
-        return new DefaultKafkaConsumerFactory<>(consumerConfigs());
-    }
-
-    @Bean
-    public Map<String, Object> consumerConfigs() {
-        Map<String, Object> props = new HashMap<>();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092"); // Update with your Kafka server
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "analytics-group");
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        return props;
-    }
     @Bean
     public NewTopic analyticsEventsTopic() {
-        return new NewTopic("analytics-events", 1, (short) 1);
-    }
-}*/
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.straycat.statistra.model.AnalyticsEvent;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.serialization.StringSerializer;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.kafka.annotation.EnableKafka;
-import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
-import org.springframework.kafka.core.*;
-
-import java.util.HashMap;
-import java.util.Map;
-
-@EnableKafka
-@Configuration
-public class KafkaConfig {
-
-    @Bean
-    public ProducerFactory<String, Object> producerFactory() {
-        Map<String, Object> configProps = new HashMap<>();
-        configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        configProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        configProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, org.springframework.kafka.support.serializer.JsonSerializer.class);
-        return new DefaultKafkaProducerFactory<>(configProps);
+        return TopicBuilder.name(properties.getKafka().getTopic())
+                .partitions(properties.getKafka().getPartitions())
+                .replicas(properties.getKafka().getReplicationFactor())
+                .build();
     }
 
     @Bean
-    public KafkaTemplate<String, Object> kafkaTemplate() {
-        return new KafkaTemplate<>(producerFactory());
+    public NewTopic analyticsEventsDeadLetterTopic() {
+        return TopicBuilder.name(properties.getKafka().getDeadLetterTopic())
+                .partitions(properties.getKafka().getPartitions())
+                .replicas(properties.getKafka().getReplicationFactor())
+                .build();
     }
 
+    /**
+     * Retries a failing batch with backoff, then routes the offending records to
+     * {@code <topic>.DLT} rather than dropping them.
+     *
+     * <p>Without this, a single malformed or unprocessable record is retried
+     * indefinitely and blocks the partition behind it, or is discarded with
+     * nothing but a log line. Dead-lettering makes the failure inspectable and
+     * lets the rest of the stream continue.
+     */
     @Bean
-    public ConsumerFactory<String, AnalyticsEvent> consumerFactory() {
-        Map<String, Object> configProps = new HashMap<>();
-        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, "analytics-group");
-        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, org.springframework.kafka.support.serializer.JsonDeserializer.class);
-        configProps.put("spring.json.trusted.packages", "com.straycat.statistra.model");
-        return new DefaultKafkaConsumerFactory<>(configProps);
-    }
+    public DefaultErrorHandler kafkaErrorHandler(KafkaOperations<Object, Object> template) {
+        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(template,
+                (record, exception) -> {
+                    log.error("Dead-lettering record from {} partition {} offset {}",
+                            record.topic(), record.partition(), record.offset(), exception);
+                    return new org.apache.kafka.common.TopicPartition(
+                            properties.getKafka().getDeadLetterTopic(), record.partition());
+                });
 
-    @Bean(name = "analyticsKafkaListenerContainerFactory")
-    public ConcurrentKafkaListenerContainerFactory<String, AnalyticsEvent> kafkaListenerContainerFactory() {
-        ConcurrentKafkaListenerContainerFactory<String, AnalyticsEvent> factory = new ConcurrentKafkaListenerContainerFactory<>();
-        factory.setConsumerFactory(consumerFactory());
-        return factory;
+        ExponentialBackOff backOff = new ExponentialBackOff(1_000L, 2.0);
+        backOff.setMaxElapsedTime(30_000L);
+
+        return new DefaultErrorHandler(recoverer, backOff);
     }
 }
