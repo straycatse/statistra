@@ -19,7 +19,12 @@ Postgres by a batch consumer, and read back through an aggregate query API.
 
 Kafka sits between accept and store so that a slow or failing database applies
 backpressure instead of rejecting client traffic, and so that events can be
-replayed.
+replayed. Ingest survives a database outage: API keys are cached, so events keep
+being accepted and buffered while Postgres is down.
+
+Events optionally carry identity, which is what makes per-person questions
+possible: unique people, and ordered conversion funnels across the sign-in
+boundary. Without it the service can only count events.
 
 ## Quickstart
 
@@ -46,6 +51,10 @@ curl -X POST localhost:8080/api/v1/events \
 curl "localhost:8080/api/v1/analytics/timeseries?interval=hour" -H "X-API-Key: $KEY"
 ```
 
+`statistra.insomnia.json` in the repo root imports into Insomnia with every
+endpoint, a prefilled **Local** environment and a **Railway** one, plus a folder
+of negative cases for checking a fresh deployment.
+
 ## Ingest
 
 `POST /api/v1/events` and `POST /api/v1/events/batch` (max 500 events, 1 MB body).
@@ -55,6 +64,8 @@ curl "localhost:8080/api/v1/analytics/timeseries?interval=hour" -H "X-API-Key: $
   "eventId": "optional-uuid",
   "eventType": "page_view",
   "occurredAt": "2026-08-12T10:00:00Z",
+  "userId": "auth0|abc123",
+  "anonymousId": "anon-77",
   "metadata": { "plan": "pro" }
 }
 ```
@@ -135,8 +146,32 @@ not let anyone count twice.
 step rather than the previous one, so an N-step funnel cannot quietly allow N
 times the window. Defaults to `7d`; accepts `30m`, `24h`, `7d`.
 
-Each step reports the actors who reached it, conversion from the previous step
-and from the top, and the median time taken.
+```json
+{
+  "from": "2026-07-14T00:00:00Z",
+  "to": "2026-08-13T00:00:00Z",
+  "conversionWindow": "7d",
+  "entered": 10,
+  "completed": 2,
+  "overallConversion": 0.2,
+  "steps": [
+    { "step": 1, "eventType": "page_view", "actors": 10,
+      "conversionFromPrevious": 1.0, "conversionFromFirst": 1.0,
+      "medianSecondsFromPrevious": null },
+    { "step": 2, "eventType": "signup", "actors": 6,
+      "conversionFromPrevious": 0.6, "conversionFromFirst": 0.6,
+      "medianSecondsFromPrevious": 141.0 },
+    { "step": 3, "eventType": "purchase", "actors": 2,
+      "conversionFromPrevious": 0.333, "conversionFromFirst": 0.2,
+      "medianSecondsFromPrevious": 88.0 }
+  ]
+}
+```
+
+`actors` counts distinct people, `conversionFromPrevious` is the share of the
+previous step who continued, `conversionFromFirst` the share of everyone who
+entered. `medianSecondsFromPrevious` is null for the first step and whenever
+nobody converted. At most 8 steps.
 
 Anonymous history is stitched to the account it became, so a funnel spanning
 sign-in counts one person rather than two. The mapping is scoped to the query
@@ -165,6 +200,30 @@ caller input is ever concatenated into SQL.
 flexible but means `user_signup` and `user_signedup` will happily coexist as two
 separate metrics. `GET /api/v1/event-types` exists to make that visible. If you
 later want strictness, an allow-list per organization is the natural next step.
+
+## Authentication
+
+Every `/api/**` request carries `X-API-Key`. The key is hashed with SHA-256 and
+resolved to an organization, which then scopes every query. No endpoint accepts
+an organization id, so there is no request a caller can construct that reads
+another tenant's data.
+
+Lookups are cached for `AUTH_CACHE_TTL` (default 60s). This is not a
+micro-optimisation. Authentication used to read Postgres on every request, which
+put the database on the critical path of the one endpoint Kafka exists to keep
+off it: with Postgres stopped, **every** ingest request failed and every event
+sent during the outage was lost, while the broker sat healthy and idle. Cached,
+the same test accepts and later drains all of them, and single-event ingest went
+from 1,678 to 4,367 req/s locally.
+
+The trade is bounded staleness: a rotated key stays usable until its entry
+expires. Rotation evicts explicitly, so revocation is immediate on the instance
+that performed it and others wait out the TTL. Set `AUTH_CACHE_TTL=0s` for
+strict revocation at the cost of a database read per request.
+
+Misses are cached too, so a flood of invalid keys cannot be used to hammer the
+database, and the cache is size-bounded so caching cannot itself become a
+memory-exhaustion vector.
 
 ## Admin
 
@@ -200,10 +259,22 @@ Every value is environment-overridable and nothing sensitive is committed.
 | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Broker |
 | `ADMIN_TOKEN` | *(unset)* | Admin API and non-probe Actuator token; unset disables both |
 | `AUTH_CACHE_TTL` | `60s` | API key lookup cache; `0s` disables it |
+| `AUTH_CACHE_MAX_ENTRIES` | `10000` | Cache bound, so caching cannot exhaust memory |
 | `MAX_BODY_BYTES` | `1048576` | Ingest body ceiling |
 | `MAX_BATCH_SIZE` | `500` | Events per batch request |
-| `RATE_LIMIT_PER_MINUTE` | `6000` | Ingest requests per org per minute |
+| `RATE_LIMIT_PER_MINUTE` | `6000` | Ingest **requests** per org per minute, not events |
+| `KAFKA_TOPIC` | `analytics-events` | Topic; the DLT is this plus `.DLT` |
+| `KAFKA_TOPIC_PARTITIONS` | `3` | Partitions created at startup |
+| `KAFKA_TOPIC_REPLICATION_FACTOR` | `1` | Must be 1 on a single broker |
+| `KAFKA_CONSUMER_GROUP` | `analytics-group` | Consumer group id |
+| `LOG_LEVEL` | `INFO` | Level for `com.straycat.statistra` |
 | `PORT` | `8080` | HTTP port |
+
+`RATE_LIMIT_PER_MINUTE` counts requests, not events, so a client within the limit
+can still send 6000 x `MAX_BATCH_SIZE` events a minute. It is a web-tier abuse
+floor; `MAX_BATCH_SIZE` and `MAX_BODY_BYTES` are what bound volume. The bucket is
+per organization, so 6000/min is 100 req/s for an entire customer, which is low
+for a tenant whose clients do not batch.
 
 ## Schema
 
@@ -213,6 +284,21 @@ migrated schema fails the boot rather than silently altering tables.
 
 To change the schema, add a new `V<n>__description.sql`. Never edit an applied
 migration: Flyway checksums them and will refuse to start.
+
+- **V1** `organizations` and `analytics_events`. `occurred_at`/`received_at` as
+  `timestamptz`, `metadata` as `jsonb` with a GIN index, and a
+  `UNIQUE (organization_id, event_id)` constraint that the consumer relies on
+  via `INSERT ... ON CONFLICT DO NOTHING`. That constraint is what stops Kafka's
+  at-least-once delivery from inflating every count.
+- **V2** identity. `user_id` and `anonymous_id`, both nullable `TEXT`, plus a
+  generated `actor_id` column that coalesces them so one index serves "every
+  event by this person" whether or not they were logged in. `user_id` wins when
+  both are present, so an identified person is stable across devices.
+
+`actor_id` is the index and filter column, not the counting column: it does not
+stitch across sign-in, since pre-login rows carry the anonymous id and post-login
+rows the user id. Queries that count people resolve identity first (see
+[Identity](#identity)).
 
 ## Deploying to Railway
 
@@ -313,9 +399,14 @@ consumer is losing.
 ./gradlew test
 ```
 
-Testcontainers starts real Postgres and Kafka, so only Docker is required. The
-suite covers the pipeline end to end, idempotency under redelivery, tenant
-isolation, and the query SQL.
+Testcontainers starts real Postgres and Kafka, so only Docker is required. 79
+tests cover the pipeline end to end, idempotency under redelivery, tenant
+isolation, the error contract, UTC bucketing, API key caching and revocation,
+and funnel semantics.
+
+The funnel tests each target a specific way funnels are got wrong rather than a
+happy path: steps taken out of order, repeated steps, both window semantics,
+identity stitching, events with no actor, and cross-tenant leakage.
 
 If containers fail to start with *"Could not find a valid Docker environment"*
 while Docker is plainly running, that is the Docker API version. Testcontainers
@@ -342,8 +433,55 @@ Application counters: `statistra.events.published`, `.publish_failed`,
 `.persisted`, `.deduplicated`, `.invalid`. A rising `deduplicated` is normal
 (retries and rebalances being suppressed); a rising `publish_failed` is not.
 
+`kafka_consumer_fetch_manager_records_lag_max` is the number to watch. Spiking
+and recovering is healthy; trending upward means the consumer cannot keep up and
+the backlog will grow without bound.
+
 Records that cannot be processed after retries go to `analytics-events.DLT`
 rather than being dropped, so failures stay inspectable.
+
+A green healthcheck does **not** prove the pipeline works. Spring Boot ships no
+Kafka health indicator and the admin client is non-fatal, so the app boots and
+reports healthy with a broken broker while ingest accepts events that never
+persist. Only an end-to-end POST followed by `/api/v1/analytics/summary` proves
+it.
+
+## Deleting data
+
+There is no delete endpoint yet, so removal means SQL. `railway connect Postgres`
+opens a prompt against a deployment.
+
+Always look first:
+
+```sql
+SELECT organization_id, event_type, count(*)
+FROM analytics_events GROUP BY 1, 2 ORDER BY 3 DESC;
+```
+
+Clearing benchmark traffic, which is the only data written with these types:
+
+```sql
+DELETE FROM analytics_events
+WHERE event_type IN ('load_test', 'single', 'warmup', 'during_outage');
+```
+
+Removing a tenant entirely, which cascades to their events:
+
+```sql
+DELETE FROM organizations WHERE id = <id>;
+```
+
+Provision a dedicated organization for benchmarking and cleanup becomes that one
+line, including its API key.
+
+Erasing one person, which is the GDPR path now that `user_id` exists:
+
+```sql
+DELETE FROM analytics_events WHERE organization_id = ? AND user_id = ?;
+```
+
+Keep `user_id` pseudonymous, an opaque internal id rather than an email address,
+so these rows stay one step removed from directly identifying data.
 
 ## Known limitations
 
@@ -355,3 +493,17 @@ rather than being dropped, so failures stay inspectable.
   should sit in front of it in production.
 - No user accounts. Organizations are provisioned by an operator through the
   admin API.
+- No delete endpoint. Removing a tenant, benchmark traffic or one person's events
+  means hand-run SQL against the database, which is the operation you least want
+  to be doing by hand. See [Deleting data](#deleting-data).
+- Funnel identity stitching is scoped to the query window: someone who identified
+  before it is only stitched if they also appear inside it. A persistent mapping
+  table would remove that limit.
+- Funnel steps are event types only. A `filter` applies to every step rather than
+  per step, so "signup where plan=pro" cannot yet be expressed.
+- Per-person numbers depend on clients sending `userId` and `anonymousId`. Events
+  ingested before identity was added, or by clients that omit it, are correctly
+  invisible to funnels and `uniqueActors` rather than counted as one phantom
+  person.
+- Retention and cohort analysis are not implemented. The identity columns make
+  them possible; the queries do not exist yet.
