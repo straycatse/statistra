@@ -26,9 +26,11 @@ Three things to know before trusting a remote run:
   * The rate limiter defaults to 6000/min, which is 100 req/s. Above that you
     are measuring the limiter, not the service. The script detects 429s and
     says so rather than quietly reporting a low number as a capacity limit.
-  * Latency measured across the internet is mostly your own round trip. Treat
-    remote p50 as "network plus service" and compare it against --phase ping,
-    which measures the same path doing almost no work.
+  * Latency measured across the internet is mostly your own round trip.
+    --phase ping measures two baselines: a 404 that touches no database, and
+    /actuator/health which adds exactly one Postgres round trip. Their
+    difference is the app-to-database latency, which is usually the number that
+    explains a slow remote run.
   * Events go into the real table under whichever key you supply. Use a
     dedicated benchmark organization, not a live tenant.
 
@@ -98,9 +100,13 @@ def metric(name):
     for line in data.decode(errors="ignore").splitlines():
         if line.startswith(name) and not line.startswith("#"):
             try:
-                return float(line.rsplit(" ", 1)[1])
+                v = float(line.rsplit(" ", 1)[1])
             except ValueError:
-                pass
+                continue
+            # Kafka reports records-lag-max as NaN when no fetch happened in the
+            # sampling window. A single NaN poisons max() for the whole run and
+            # reports "nan records" instead of a measurement.
+            return None if v != v else v
     return None
 
 
@@ -144,17 +150,43 @@ def drive(path, payload, n, conns, label):
     return elapsed, codes
 
 
-def phase_ping(n=200):
-    """Baseline for everything else: the same network path doing almost no work."""
-    print("\n=== Ping: GET /actuator/health ===")
-    lat, codes = [], {}
+def phase_ping(n=100):
+    """
+    Two baselines, because the difference between them is the diagnosis.
+
+    A 404 on an unknown path is pure network: the API key resolves from cache,
+    the router finds nothing, and no query is issued. /actuator/health runs the
+    datasource health indicator, so it is that same path plus exactly one round
+    trip to Postgres.
+
+    Subtracting the two measures the app-to-database latency directly, which is
+    the number that explains almost everything else in a remote run. On a
+    same-region private network it should be low single digits.
+    """
+    print("\n=== Baselines ===")
     c = connect()
-    for _ in range(n):
-        ms, st, _ = request(c, "GET", "/actuator/health")
-        lat.append(ms)
-        codes[st] = codes.get(st, 0) + 1
-    report("health", lat, codes, sum(lat) / 1000, n)
-    print("    Subtract this from ingest latency to get the service's own cost.")
+    request(c, "GET", "/api/v1/nope")  # warm the API key cache before timing
+
+    def probe(path, label):
+        lat, codes = [], {}
+        conn = connect()
+        for _ in range(n):
+            ms, st, _ = request(conn, "GET", path)
+            lat.append(ms)
+            codes[st] = codes.get(st, 0) + 1
+        s = sorted(lat)
+        print(f"  {label:<34} p50 {pct(s,.50):>7.1f} ms   p95 {pct(s,.95):>7.1f} ms   {codes}")
+        return pct(s, .50)
+
+    net = probe("/api/v1/nope", "network only (404, no db)")
+    db = probe("/actuator/health", "network + one db round trip")
+    print(f"\n  inferred app-to-database round trip: {db - net:.1f} ms")
+    if db - net > 20:
+        print("  That is high. On Railway, same-region private networking should be")
+        print("  low single digits. Check that Postgres is in the same region as the")
+        print("  app: a cross-region database explains slow writes and slow queries")
+        print("  at once, and no amount of query tuning will fix it.")
+    print(f"  Subtract {net:.1f} ms, not the health figure, from ingest latency.")
 
 
 def phase_throughput(batch, batches, conns):
@@ -190,7 +222,10 @@ def phase_throughput(batch, batches, conns):
     print(f"    accepted            : {sent / accept:>10,.0f} events/s")
     print(f"    persisted end-to-end: {sent / (accept + drain):>10,.0f} events/s")
     print(f"    drain after last 202: {drain:>10.1f} s")
-    print(f"    peak consumer lag   : {max(lags) if lags else 0:>10,.0f} records")
+    if lags:
+        print(f"    peak consumer lag   : {max(lags):>10,.0f} records")
+    else:
+        print("    peak consumer lag   :        n/a  (metric unreadable; check --admin-token)")
     print("    The accept/persist gap is what Kafka buys: the backlog is the burst")
     print("    Postgres could not have taken synchronously.")
 
