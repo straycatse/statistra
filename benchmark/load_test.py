@@ -48,7 +48,7 @@ import time
 import urllib.parse
 
 CFG = {"base": "http://localhost:8080", "key": "st_dev_local_key_not_for_production",
-       "token": "local-dev-admin-token", "local": True}
+       "token": "local-dev-admin-token", "local": True, "rtt": None}
 
 
 def connect():
@@ -110,6 +110,26 @@ def metric(name):
     return None
 
 
+PLANS = ["free"] * 85 + ["pro"] * 10 + ["enterprise"] * 5
+COUNTRIES = ["SE", "NO", "DK", "FI", "DE", "NL", "GB", "US"]
+
+
+def sample_event(i, event_type="load_test"):
+    """
+    Spread metadata across realistic cardinalities.
+
+    Stamping every event with {"plan": "pro"} makes the filtered query a
+    predicate that matches everything, which a planner correctly answers with a
+    sequential scan. The result looks identical to a missing index, so the
+    comparison says nothing. Varying it means filter=plan:enterprise selects
+    about 5% and the index has a reason to exist.
+    """
+    return {"eventType": event_type,
+            "metadata": {"plan": PLANS[i % len(PLANS)],
+                         "country": COUNTRIES[i % len(COUNTRIES)],
+                         "build": f"v{i % 40}"}}
+
+
 def pct(s, p):
     return s[min(int(len(s) * p), len(s) - 1)]
 
@@ -129,12 +149,21 @@ def report(label, lat, codes, elapsed, n):
 
 
 def drive(path, payload, n, conns, label):
+    """
+    Returns the number of requests that were actually accepted, not the number
+    asked for. Splitting n as `n // conns` silently dropped the remainder, so 60
+    requests over 8 connections sent 56 while the caller still waited for 60 to
+    arrive, and the drain could only ever time out. The remainder is now spread
+    across the first workers, and callers size their expectations from the
+    responses rather than from the request.
+    """
     lat, codes, lock = [], {}, threading.Lock()
+    share = [n // conns + (1 if i < n % conns else 0) for i in range(conns)]
 
-    def worker(_):
+    def worker(i):
         c = connect()
         local = []
-        for _ in range(n // conns):
+        for _ in range(share[i]):
             local.append(request(c, "POST", path, payload)[:2])
         with lock:
             for ms, st in local:
@@ -146,6 +175,7 @@ def drive(path, payload, n, conns, label):
     [t.start() for t in ts]
     [t.join() for t in ts]
     elapsed = time.perf_counter() - t0
+    assert len(lat) == n, f"drive sent {len(lat)} of {n} requests"
     report(label, lat, codes, elapsed, len(lat))
     return elapsed, codes
 
@@ -221,6 +251,7 @@ def phase_ping(n=100):
         return pct(s, .50)
 
     net = probe("/api/v1/nope", "network only (404, no db)")
+    CFG["rtt"] = net
     db = probe("/actuator/health", "network + one db round trip")
     print(f"\n  inferred app-to-database round trip: {db - net:.1f} ms")
     if db - net > 20:
@@ -233,8 +264,7 @@ def phase_ping(n=100):
 
 def phase_throughput(batch, batches, conns):
     print(f"\n=== Throughput: {batch * batches:,} events via {batches} batch requests ===")
-    payload = {"events": [{"eventType": "load_test", "metadata": {"plan": "pro"}}
-                          for _ in range(batch)]}
+    payload = {"events": [sample_event(i) for i in range(batch)]}
     start = persisted_count()
     lags, stop = [], threading.Event()
 
@@ -248,7 +278,17 @@ def phase_throughput(batch, batches, conns):
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
     accept, codes = drive("/api/v1/events/batch", payload, batches, conns, "batch ingest")
-    sent = batch * batches
+    # Count what the service accepted, not what we tried to send. A rejected
+    # batch never reaches Kafka, so waiting for it turns a partial failure into
+    # a meaningless timeout instead of a visible one.
+    sent = batch * codes.get(202, 0)
+    if sent != batch * batches:
+        print(f"    NOTE: {codes.get(202, 0)} of {batches} batches accepted; "
+              f"expecting {sent:,} events, not {batch * batches:,}")
+    if sent == 0:
+        print("    Nothing was accepted. Skipping drain.")
+        stop.set()
+        return
 
     if start < 0:
         stop.set()
@@ -260,6 +300,8 @@ def phase_throughput(batch, batches, conns):
         time.sleep(1)
     drain = time.perf_counter() - t1
     stop.set()
+    final = persisted_count()
+    timed_out = final < start + sent
 
     print(f"    accepted            : {sent / accept:>10,.0f} events/s")
     print(f"    persisted end-to-end: {sent / (accept + drain):>10,.0f} events/s")
@@ -268,14 +310,25 @@ def phase_throughput(batch, batches, conns):
         print(f"    peak consumer lag   : {max(lags):>10,.0f} records")
     else:
         print("    peak consumer lag   :        n/a  (metric unreadable; check --admin-token)")
+    if timed_out:
+        print(f"    WARNING: drain did not finish within {drain:.0f}s. Only "
+              f"{final - start:,} of {sent:,} events arrived, so the persisted")
+        print("             figure above is a lower bound, not a measurement.")
     print("    The accept/persist gap is what Kafka buys: the backlog is the burst")
     print("    Postgres could not have taken synchronously.")
 
 
 def phase_latency(n, conns):
     print(f"\n=== Latency: {n:,} single-event POSTs ===")
-    drive("/api/v1/events", {"eventType": "single", "metadata": {"plan": "pro"}},
-          n, conns, "single ingest")
+    drive("/api/v1/events", sample_event(7, "single"), n, conns, "single ingest")
+
+    if CFG["rtt"]:
+        ceiling = conns / (CFG["rtt"] / 1000.0)
+        print(f"    client ceiling: {ceiling:,.0f} req/s "
+              f"({conns} connections at {CFG['rtt']:.1f} ms round trip)")
+        print("    Each connection sends one request at a time, so this is the most")
+        print("    the client can ask for regardless of server capacity. Approaching")
+        print("    it means you measured your own concurrency, not the service.")
 
 
 def phase_query(n=100):
@@ -292,7 +345,8 @@ def phase_query(n=100):
         ("breakdown eventType", "/api/v1/analytics/breakdown?groupBy=eventType"),
         ("breakdown metadata", "/api/v1/analytics/breakdown?groupBy=metadata.plan"),
         ("summary", "/api/v1/analytics/summary"),
-        ("summary + filter", "/api/v1/analytics/summary?filter=plan:pro"),
+        ("summary + filter (5%)", "/api/v1/analytics/summary?filter=plan:enterprise"),
+        ("summary + filter (85%)", "/api/v1/analytics/summary?filter=plan:free"),
         ("raw events page", "/api/v1/events?limit=100"),
         ("event types", "/api/v1/event-types"),
     ]
@@ -306,8 +360,13 @@ def phase_query(n=100):
         s = sorted(lat)
         flag = "" if codes.get(200) == n else f"  <-- {codes}"
         print(f"  {label:<22} p50 {pct(s,.50):>7.1f} ms   p95 {pct(s,.95):>7.1f} ms{flag}")
-    print("\n  Compare these against the ping baseline. A filter query that tracks")
-    print("  the unfiltered one is a sign the GIN index is not being chosen.")
+    if CFG["rtt"]:
+        print(f"\n  Subtract the {CFG['rtt']:.1f} ms network baseline: what is left is the")
+        print("  service's own cost. The two filtered rows are the interesting pair.")
+        print("  The 5% filter should beat the 85% one; if they match, the GIN index")
+        print("  is not being used. If both beat the unfiltered summary, it is.")
+        print("  Only meaningful against data this script generated: it varies plan,")
+        print("  country and build so the predicates have realistic selectivity.")
 
 
 def phase_outage(seconds):
