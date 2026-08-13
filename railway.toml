@@ -3,9 +3,12 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Actuator's health endpoint also reports datasource and Kafka connectivity, so
-# a green check here means the pipeline is actually able to work, not merely
-# that the process is alive.
+# Covers the process and the datasource: Boot's health endpoint returns 503 if
+# the database is unreachable, so a green check means more than "the process is
+# alive". It does NOT cover Kafka. Boot ships no Kafka health indicator, and the
+# admin client is non-fatal by default, so the app boots and reports healthy
+# with a broken broker while ingest accepts events that never persist. Only an
+# end-to-end POST followed by /api/v1/analytics/summary proves the pipeline.
 healthcheckPath = "/actuator/health"
 healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"

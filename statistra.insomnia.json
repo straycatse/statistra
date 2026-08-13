@@ -1,0 +1,943 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_date": "2026-08-13T00:00:00.000Z",
+  "__export_source": "statistra.repo:v1",
+  "resources": [
+    {
+      "_id": "wrk_statistra",
+      "_type": "workspace",
+      "parentId": null,
+      "name": "Statistra API",
+      "description": "Multi-tenant analytics ingest and query API.\n\nAuth is two separate schemes:\n  - Tenant endpoints (/api/**) use the X-API-Key header.\n  - Operator endpoints (/admin/**, /actuator/* except health) use a Bearer ADMIN_TOKEN.\n\nA tenant key never grants operator access, and no query endpoint accepts an\norganization id: scope comes from the key, so there is no request you can\nconstruct that reads another tenant's data.\n\nPick an environment (Local or Railway) before sending anything.\nRun 'Create organization' first, then paste the returned apiKey into the\nenvironment: it is shown exactly once and cannot be recovered.",
+      "scope": "collection"
+    },
+    {
+      "_id": "env_base",
+      "_type": "environment",
+      "parentId": "wrk_statistra",
+      "name": "Base Environment",
+      "data": {
+        "baseUrl": "http://localhost:8080",
+        "apiKey": "",
+        "adminToken": "",
+        "orgId": "1"
+      },
+      "dataPropertyOrder": {
+        "&": [
+          "baseUrl",
+          "apiKey",
+          "adminToken",
+          "orgId"
+        ]
+      },
+      "metaSortKey": 1,
+      "isPrivate": false
+    },
+    {
+      "_id": "env_local",
+      "_type": "environment",
+      "parentId": "env_base",
+      "name": "Local",
+      "data": {
+        "baseUrl": "http://localhost:8080",
+        "apiKey": "st_dev_local_key_not_for_production",
+        "adminToken": "local-dev-admin-token",
+        "orgId": "1"
+      },
+      "dataPropertyOrder": {
+        "&": [
+          "baseUrl",
+          "apiKey",
+          "adminToken",
+          "orgId"
+        ]
+      },
+      "metaSortKey": 1,
+      "isPrivate": false
+    },
+    {
+      "_id": "env_railway",
+      "_type": "environment",
+      "parentId": "env_base",
+      "name": "Railway",
+      "data": {
+        "baseUrl": "https://REPLACE-ME.up.railway.app",
+        "apiKey": "",
+        "adminToken": "",
+        "orgId": "1"
+      },
+      "dataPropertyOrder": {
+        "&": [
+          "baseUrl",
+          "apiKey",
+          "adminToken",
+          "orgId"
+        ]
+      },
+      "metaSortKey": 2,
+      "isPrivate": false
+    },
+    {
+      "_id": "fld_admin",
+      "_type": "request_group",
+      "parentId": "wrk_statistra",
+      "name": "1. Admin (operator)",
+      "description": "Guarded by Bearer ADMIN_TOKEN, separate from tenant keys because minting\ncredentials must not be reachable with a tenant credential.\n\nIf ADMIN_TOKEN is unset the API answers 503 rather than running open.",
+      "environment": {},
+      "environmentPropertyOrder": null,
+      "metaSortKey": -1
+    },
+    {
+      "_id": "req_org_create",
+      "_type": "request",
+      "parentId": "fld_admin",
+      "name": "Create organization",
+      "description": "Returns the plaintext apiKey ONCE. It is stored only as a SHA-256 hash and\ncannot be recovered, only replaced via rotate-key. Copy it into the\nenvironment's apiKey variable.",
+      "method": "POST",
+      "url": "{{ _.baseUrl }}/admin/organizations",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"name\": \"Acme Inc\"\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.adminToken }}"
+      },
+      "metaSortKey": -2,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_org_list",
+      "_type": "request",
+      "parentId": "fld_admin",
+      "name": "List organizations",
+      "description": "Never returns key material, only the display prefix.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/admin/organizations",
+      "body": {},
+      "parameters": [],
+      "headers": [],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.adminToken }}"
+      },
+      "metaSortKey": -3,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_org_rotate",
+      "_type": "request",
+      "parentId": "fld_admin",
+      "name": "Rotate API key (see warning)",
+      "description": "Issues a replacement key and invalidates the old one immediately.\n\nWARNING: orgId defaults to 1, and on a local stack organization 1 is the\nseeded 'Local Development' org. Rotating it invalidates\nst_dev_local_key_not_for_production, after which every other request in\nthis collection returns 401 with no hint as to why.\n\nRestarting the app re-seeds the dev org and restores that key. Against a\nreal deployment, set orgId to the organization you actually mean and copy\nthe returned apiKey into the environment: the old one stops working at once.",
+      "method": "POST",
+      "url": "{{ _.baseUrl }}/admin/organizations/{{ _.orgId }}/rotate-key",
+      "body": {},
+      "parameters": [],
+      "headers": [],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.adminToken }}"
+      },
+      "metaSortKey": -4,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "fld_ingest",
+      "_type": "request_group",
+      "parentId": "wrk_statistra",
+      "name": "2. Ingest",
+      "description": "Returns 202 Accepted: the event is published to Kafka and persisted\nasynchronously, so a 202 means accepted, not yet stored. Use the Analytics\nfolder to confirm it landed.\n\norganizationId is never accepted from the body. It comes from the API key.",
+      "environment": {},
+      "environmentPropertyOrder": null,
+      "metaSortKey": -5
+    },
+    {
+      "_id": "req_ingest",
+      "_type": "request",
+      "parentId": "fld_ingest",
+      "name": "Ingest event",
+      "description": "eventType is the only required field. occurredAt defaults to now and may be\nbackdated to backfill history; eventId is generated server-side if omitted.",
+      "method": "POST",
+      "url": "{{ _.baseUrl }}/api/v1/events",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"eventType\": \"page_view\",\n  \"metadata\": {\n    \"plan\": \"pro\",\n    \"country\": \"SE\"\n  }\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        },
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -6,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_ingest_idem",
+      "_type": "request",
+      "parentId": "fld_ingest",
+      "name": "Ingest event (fixed eventId, idempotent)",
+      "description": "Send this twice. The count must not change.\n\nKafka delivers at least once, so a UNIQUE (organization_id, event_id)\nconstraint plus INSERT ... ON CONFLICT DO NOTHING is what stops redeliveries\nand client retries from inflating every metric.",
+      "method": "POST",
+      "url": "{{ _.baseUrl }}/api/v1/events",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"eventId\": \"11111111-2222-3333-4444-555555555555\",\n  \"eventType\": \"signup\",\n  \"occurredAt\": \"2026-08-13T10:00:00Z\",\n  \"metadata\": {\n    \"plan\": \"free\"\n  }\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        },
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -7,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_ingest_batch",
+      "_type": "request",
+      "parentId": "fld_ingest",
+      "name": "Ingest batch",
+      "description": "Up to MAX_BATCH_SIZE events (default 500) per request. Exceeding it is a 400.",
+      "method": "POST",
+      "url": "{{ _.baseUrl }}/api/v1/events/batch",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"events\": [\n    {\n      \"eventType\": \"page_view\",\n      \"metadata\": {\n        \"plan\": \"pro\",\n        \"country\": \"SE\"\n      }\n    },\n    {\n      \"eventType\": \"page_view\",\n      \"metadata\": {\n        \"plan\": \"free\",\n        \"country\": \"NO\"\n      }\n    },\n    {\n      \"eventType\": \"signup\",\n      \"metadata\": {\n        \"plan\": \"pro\",\n        \"country\": \"SE\"\n      }\n    }\n  ]\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        },
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -8,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "fld_query",
+      "_type": "request_group",
+      "parentId": "wrk_statistra",
+      "name": "3. Analytics",
+      "description": "Every query is scoped to the authenticated organization.\n\nTime semantics: buckets are always UTC and the range is half-open, from\ninclusive to to exclusive. Omitting both defaults to the last 30 days.\n\nfilter is repeatable: ?filter=plan:pro&filter=country:SE means contains BOTH.",
+      "environment": {},
+      "environmentPropertyOrder": null,
+      "metaSortKey": -9
+    },
+    {
+      "_id": "req_timeseries",
+      "_type": "request",
+      "parentId": "fld_query",
+      "name": "Time series",
+      "description": "Counts per bucket. Empty buckets are returned as zero rather than omitted,\nbecause a chart drawn from a gapped series silently closes the gaps and\nmisstates the shape of the data.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/analytics/timeseries",
+      "body": {},
+      "parameters": [
+        {
+          "id": null,
+          "name": "interval",
+          "value": "day",
+          "description": "",
+          "disabled": ""
+        },
+        {
+          "id": null,
+          "name": "from",
+          "value": "2026-08-01T00:00:00Z",
+          "description": "ISO-8601 instant, inclusive",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "to",
+          "value": "2026-09-01T00:00:00Z",
+          "description": "ISO-8601 instant, exclusive",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "eventType",
+          "value": "page_view",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "filter",
+          "value": "plan:pro",
+          "description": "Repeatable",
+          "disabled": true
+        }
+      ],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -10,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_breakdown_type",
+      "_type": "request",
+      "parentId": "fld_query",
+      "name": "Breakdown by event type",
+      "description": "",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/analytics/breakdown",
+      "body": {},
+      "parameters": [
+        {
+          "id": null,
+          "name": "groupBy",
+          "value": "eventType",
+          "description": "",
+          "disabled": false
+        },
+        {
+          "id": null,
+          "name": "limit",
+          "value": "50",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "from",
+          "value": "2026-08-01T00:00:00Z",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "to",
+          "value": "2026-09-01T00:00:00Z",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "filter",
+          "value": "plan:pro",
+          "description": "Repeatable",
+          "disabled": true
+        }
+      ],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -11,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_breakdown_meta",
+      "_type": "request",
+      "parentId": "fld_query",
+      "name": "Breakdown by metadata key",
+      "description": "groupBy=metadata.<key>. The key is bound through 'metadata ->> ?', never\nconcatenated into SQL, and additionally validated against\n^[a-zA-Z0-9_.-]{1,64}$.\n\nA null value in the results means events that do not carry that key.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/analytics/breakdown",
+      "body": {},
+      "parameters": [
+        {
+          "id": null,
+          "name": "groupBy",
+          "value": "metadata.plan",
+          "description": "",
+          "disabled": false
+        },
+        {
+          "id": null,
+          "name": "limit",
+          "value": "50",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "filter",
+          "value": "country:SE",
+          "description": "Repeatable",
+          "disabled": true
+        }
+      ],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -12,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_summary",
+      "_type": "request",
+      "parentId": "fld_query",
+      "name": "Summary",
+      "description": "Totals, distinct event types, first and last event. The quickest check that\nthe pipeline actually persisted something.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/analytics/summary",
+      "body": {},
+      "parameters": [
+        {
+          "id": null,
+          "name": "from",
+          "value": "2026-08-01T00:00:00Z",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "to",
+          "value": "2026-09-01T00:00:00Z",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "eventType",
+          "value": "page_view",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "filter",
+          "value": "plan:pro",
+          "description": "Repeatable, ANDed via jsonb containment",
+          "disabled": true
+        }
+      ],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -13,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_events",
+      "_type": "request",
+      "parentId": "fld_query",
+      "name": "Raw events (paginated)",
+      "description": "Newest first. Response carries nextOffset, which is null on the last page.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/events",
+      "body": {},
+      "parameters": [
+        {
+          "id": null,
+          "name": "limit",
+          "value": "100",
+          "description": "",
+          "disabled": false
+        },
+        {
+          "id": null,
+          "name": "offset",
+          "value": "0",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "eventType",
+          "value": "page_view",
+          "description": "",
+          "disabled": true
+        },
+        {
+          "id": null,
+          "name": "filter",
+          "value": "plan:pro",
+          "description": "",
+          "disabled": true
+        }
+      ],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -14,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_event_types",
+      "_type": "request",
+      "parentId": "fld_query",
+      "name": "Event types",
+      "description": "Every event type this organization has sent, with counts and last-seen.\nEvent types are free-form strings and are never registered, so this is what\nmakes a typo such as user_signup vs user_signedup visible instead of\nsilently splitting one metric into two.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/event-types",
+      "body": {},
+      "parameters": [],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -15,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "fld_ops",
+      "_type": "request_group",
+      "parentId": "wrk_statistra",
+      "name": "4. Operations",
+      "description": "Health is open because the platform healthcheck must reach it unauthenticated.\nEverything else under /actuator requires the admin token: management shares\nthe public port and the scrape output includes ingest volume.\n\nNote a green healthcheck does NOT prove Kafka works. Spring Boot ships no\nKafka health indicator, so only an end-to-end ingest then summary proves it.",
+      "environment": {},
+      "environmentPropertyOrder": null,
+      "metaSortKey": -16
+    },
+    {
+      "_id": "req_health",
+      "_type": "request",
+      "parentId": "fld_ops",
+      "name": "Health (open)",
+      "description": "200 UP. Returns 503 if a health indicator such as the datasource is down.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/actuator/health",
+      "body": {},
+      "parameters": [],
+      "headers": [],
+      "authentication": {},
+      "metaSortKey": -17,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_metrics",
+      "_type": "request",
+      "parentId": "fld_ops",
+      "name": "Metrics",
+      "description": "",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/actuator/metrics",
+      "body": {},
+      "parameters": [],
+      "headers": [],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.adminToken }}"
+      },
+      "metaSortKey": -18,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_prom",
+      "_type": "request",
+      "parentId": "fld_ops",
+      "name": "Prometheus scrape",
+      "description": "Counters: statistra.events.published / .publish_failed / .persisted /\n.deduplicated / .invalid.\n\nA rising deduplicated is normal, retries and rebalances being suppressed.\nA rising publish_failed is not.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/actuator/prometheus",
+      "body": {},
+      "parameters": [],
+      "headers": [],
+      "authentication": {
+        "type": "bearer",
+        "token": "{{ _.adminToken }}"
+      },
+      "metaSortKey": -19,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "fld_checks",
+      "_type": "request_group",
+      "parentId": "wrk_statistra",
+      "name": "5. Contract checks",
+      "description": "Negative cases, handy for verifying a fresh deployment. Each should return the\nstatus in its name, never a 500.",
+      "environment": {},
+      "environmentPropertyOrder": null,
+      "metaSortKey": -20
+    },
+    {
+      "_id": "req_401",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "No API key -> 401",
+      "description": "",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/analytics/summary",
+      "body": {},
+      "parameters": [],
+      "headers": [],
+      "authentication": {},
+      "metaSortKey": -21,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_401b",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "Bad API key -> 401",
+      "description": "",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/analytics/summary",
+      "body": {},
+      "parameters": [],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "st_not_a_real_key"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -22,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_400v",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "Missing eventType -> 400",
+      "description": "Response names the offending field under 'fields'.",
+      "method": "POST",
+      "url": "{{ _.baseUrl }}/api/v1/events",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"metadata\": {\n    \"a\": \"b\"\n  }\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        },
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -23,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_400i",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "Bad interval -> 400",
+      "description": "",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/analytics/timeseries",
+      "body": {},
+      "parameters": [
+        {
+          "id": null,
+          "name": "interval",
+          "value": "fortnight",
+          "description": "",
+          "disabled": false
+        }
+      ],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -24,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_400t",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "Unparseable timestamp -> 400",
+      "description": "",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/analytics/timeseries",
+      "body": {},
+      "parameters": [
+        {
+          "id": null,
+          "name": "from",
+          "value": "yesterday",
+          "description": "",
+          "disabled": false
+        }
+      ],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -25,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_404",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "Unknown path -> 404",
+      "description": "",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/api/v1/nope",
+      "body": {},
+      "parameters": [],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -26,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_405",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "Wrong method -> 405",
+      "description": "",
+      "method": "DELETE",
+      "url": "{{ _.baseUrl }}/api/v1/events",
+      "body": {},
+      "parameters": [],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -27,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_403",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "Tenant key on operator route -> 401",
+      "description": "A tenant credential must never reach an operator surface.",
+      "method": "GET",
+      "url": "{{ _.baseUrl }}/actuator/prometheus",
+      "body": {},
+      "parameters": [],
+      "headers": [
+        {
+          "name": "X-API-Key",
+          "value": "{{ _.apiKey }}"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -28,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    },
+    {
+      "_id": "req_admin401",
+      "_type": "request",
+      "parentId": "fld_checks",
+      "name": "Admin without token -> 401",
+      "description": "",
+      "method": "POST",
+      "url": "{{ _.baseUrl }}/admin/organizations",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"name\": \"nope\"\n}"
+      },
+      "parameters": [],
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ],
+      "authentication": {},
+      "metaSortKey": -29,
+      "isPrivate": false,
+      "settingStoreCookies": true,
+      "settingSendCookies": true,
+      "settingDisableRenderRequestBody": false,
+      "settingEncodeUrl": true,
+      "settingRebuildPath": true,
+      "settingFollowRedirects": "global"
+    }
+  ]
+}
