@@ -150,6 +150,48 @@ def drive(path, payload, n, conns, label):
     return elapsed, codes
 
 
+def warmup(seconds, conns=4):
+    """
+    Drive traffic and throw the results away before measuring anything.
+
+    Without this the first phase to run measures a cold JVM: interpreted
+    bytecode until the JIT catches up, an empty Hikari pool, unresolved DNS,
+    cold TLS. That is not a property of the service, it is a property of having
+    just deployed, and it made a fresh remote run report an app-to-database
+    round trip of ~150 ms that is really ~1 ms.
+
+    Whichever phase ran first absorbed all of it, which is exactly the phase
+    everything else was being compared against.
+    """
+    if seconds <= 0:
+        print("  warmup skipped; the first phase will absorb JIT and pool startup")
+        return
+    print(f"  warming up for {seconds}s (results discarded)...", end="", flush=True)
+    stop = time.perf_counter() + seconds
+    count = [0]
+    lock = threading.Lock()
+
+    def worker(_):
+        c = connect()
+        n = 0
+        while time.perf_counter() < stop:
+            request(c, "GET", "/api/v1/nope")
+            request(c, "GET", "/actuator/health")
+            request(c, "GET", "/api/v1/analytics/summary?interval=day")
+            # The write path needs the most compilation, so it is worth warming
+            # even though these few events land in the table. Every phase reads
+            # counts as a delta, so they do not distort any result.
+            request(c, "POST", "/api/v1/events", {"eventType": "warmup"})
+            n += 4
+        with lock:
+            count[0] += n
+
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(conns)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    print(f" {count[0]:,} requests")
+
+
 def phase_ping(n=100):
     """
     Two baselines, because the difference between them is the diagnosis.
@@ -348,6 +390,9 @@ if __name__ == "__main__":
                     help="Concurrent connections used to drive load.")
     ap.add_argument("--outage-seconds", type=int, default=40,
                     help="How long to keep Postgres stopped in the outage phase.")
+    ap.add_argument("--warmup-seconds", type=int, default=15,
+                    help="Discarded traffic before measuring, so the first phase does "
+                         "not absorb JIT and connection-pool startup. 0 disables.")
     a = ap.parse_args()
 
     CFG["base"] = a.base_url.rstrip("/")
@@ -369,6 +414,8 @@ if __name__ == "__main__":
     if not CFG["local"]:
         print("Remote run. Events land in the real table under this key, and latency")
         print("includes your network round trip. Use a dedicated benchmark org.")
+
+    warmup(a.warmup_seconds)
 
     if a.phase in ("all", "baseline", "ping"):
         phase_ping()

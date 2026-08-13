@@ -236,6 +236,12 @@ needed. Three caveats:
 The outage phase refuses to run against a remote host, because it works by
 stopping Postgres.
 
+Every run discards 15 seconds of traffic before measuring, so the first phase
+does not absorb JIT compilation and connection-pool startup. Without it a fresh
+deployment reports its cold-start cost as though it were steady-state: locally
+that alone is a 3x difference in p50 and 6x in p95, and it is larger on a small
+container. `--warmup-seconds 0` disables it.
+
 Measured locally on an M-series laptop against containerised Postgres and Kafka.
 Ratios transfer between machines; absolute numbers do not.
 
