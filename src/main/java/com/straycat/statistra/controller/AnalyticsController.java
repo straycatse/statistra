@@ -86,6 +86,8 @@ public class AnalyticsController {
                 organization.getId(),
                 request.eventType(),
                 request.occurredAtOrNow(),
-                request.metadataOrEmpty());
+                request.metadataOrEmpty(),
+                request.userId(),
+                request.anonymousId());
     }
 }

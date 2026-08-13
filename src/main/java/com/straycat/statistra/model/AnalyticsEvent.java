@@ -19,6 +19,10 @@ public class AnalyticsEvent {
     private String eventType;
     private Instant occurredAt;
     private Map<String, Object> metadata;
+    /** The tenant's own user identifier, once the person is authenticated. */
+    private String userId;
+    /** Client-generated identifier that also covers logged-out traffic. */
+    private String anonymousId;
 
     public AnalyticsEvent() {
         // Required by the JSON deserializer.
@@ -29,11 +33,23 @@ public class AnalyticsEvent {
                           String eventType,
                           Instant occurredAt,
                           Map<String, Object> metadata) {
+        this(eventId, organizationId, eventType, occurredAt, metadata, null, null);
+    }
+
+    public AnalyticsEvent(UUID eventId,
+                          Long organizationId,
+                          String eventType,
+                          Instant occurredAt,
+                          Map<String, Object> metadata,
+                          String userId,
+                          String anonymousId) {
         this.eventId = eventId;
         this.organizationId = organizationId;
         this.eventType = eventType;
         this.occurredAt = occurredAt;
         this.metadata = metadata;
+        this.userId = userId;
+        this.anonymousId = anonymousId;
     }
 
     public UUID getEventId() {
@@ -76,6 +92,22 @@ public class AnalyticsEvent {
         this.metadata = metadata;
     }
 
+    public String getUserId() {
+        return userId;
+    }
+
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
+
+    public String getAnonymousId() {
+        return anonymousId;
+    }
+
+    public void setAnonymousId(String anonymousId) {
+        this.anonymousId = anonymousId;
+    }
+
     @Override
     public String toString() {
         // Metadata is deliberately summarised rather than printed. It is
@@ -84,6 +116,7 @@ public class AnalyticsEvent {
                 + ", organizationId=" + organizationId
                 + ", eventType='" + eventType + '\''
                 + ", occurredAt=" + occurredAt
+                + ", identified=" + (userId != null)
                 + ", metadataKeys=" + (metadata == null ? 0 : metadata.size())
                 + '}';
     }

@@ -29,8 +29,9 @@ public class AnalyticsEventDao {
 
     private static final String INSERT_SQL = """
             INSERT INTO analytics_events
-                (event_id, organization_id, event_type, occurred_at, metadata)
-            VALUES (?, ?, ?, ?, ?::jsonb)
+                (event_id, organization_id, event_type, occurred_at, metadata,
+                 user_id, anonymous_id)
+            VALUES (?, ?, ?, ?, ?::jsonb, ?, ?)
             ON CONFLICT (organization_id, event_id) DO NOTHING
             """;
 
@@ -71,6 +72,11 @@ public class AnalyticsEventDao {
                 // Bound as text and cast by the ?::jsonb in the statement, so
                 // this class never has to compile against the Postgres driver.
                 ps.setString(5, serialiseMetadata(event));
+                // actor_id is a generated column, so it is never set here: the
+                // database derives it, which keeps it consistent for rows
+                // written by anything other than this application.
+                ps.setString(6, blankToNull(event.getUserId()));
+                ps.setString(7, blankToNull(event.getAnonymousId()));
             }
 
             @Override
@@ -87,6 +93,15 @@ public class AnalyticsEventDao {
             }
         }
         return inserted;
+    }
+
+    /**
+     * An empty string is not an identity. Storing one would make actor_id a
+     * non-null empty value, silently merging every such event into a single
+     * phantom actor and inflating any per-person count.
+     */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     private String serialiseMetadata(AnalyticsEvent event) throws SQLException {

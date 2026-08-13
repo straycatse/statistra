@@ -19,6 +19,15 @@ import java.util.UUID;
  *                   server-side when omitted.
  * @param occurredAt when the event happened, defaulting to now. Clients may
  *                   backfill history by setting this to a past instant.
+ * @param userId     your own identifier for the person, not ours. Stored
+ *                   verbatim and scoped to your organization, so it can never
+ *                   collide with another tenant's. Keep it pseudonymous: an
+ *                   internal id, never an email address.
+ * @param anonymousId client-generated identifier that survives from before
+ *                   sign-in. Keep sending it <em>after</em> the user
+ *                   authenticates as well: that overlap is the only record
+ *                   linking someone's anonymous history to their account, and
+ *                   it cannot be reconstructed later if never written.
  */
 public record IngestEventRequest(
         UUID eventId,
@@ -28,6 +37,12 @@ public record IngestEventRequest(
         String eventType,
 
         Instant occurredAt,
+
+        @Size(max = 200, message = "userId must be at most 200 characters")
+        String userId,
+
+        @Size(max = 200, message = "anonymousId must be at most 200 characters")
+        String anonymousId,
 
         Map<String, Object> metadata) {
 

@@ -38,10 +38,18 @@ public final class QueryResponses {
             List<BreakdownEntry> entries) {
     }
 
+    /**
+     * @param uniqueActors distinct people, counting an identified user once
+     *                     however many devices or sessions they used, and
+     *                     ignoring events with no actor such as webhooks and
+     *                     cron runs. This is the "how many people" number, as
+     *                     opposed to totalEvents.
+     */
     public record Summary(
             Instant from,
             Instant to,
             long totalEvents,
+            long uniqueActors,
             long distinctEventTypes,
             Instant firstEventAt,
             Instant lastEventAt) {
@@ -69,5 +77,41 @@ public final class QueryResponses {
     }
 
     public record EventTypeEntry(String eventType, long count, Instant lastSeenAt) {
+    }
+
+    /**
+     * One step of a funnel.
+     *
+     * @param actors            distinct people who reached this step in order.
+     *                          An actor is counted once however many times they
+     *                          repeated the event.
+     * @param conversionFromPrevious share of the previous step's actors who went
+     *                          on to reach this one. 1.0 for the first step.
+     * @param conversionFromFirst share of the funnel's entrants who got this far.
+     * @param medianSecondsFromPrevious typical time to take this step, or null
+     *                          for the first step and whenever nobody converted.
+     */
+    public record FunnelStep(
+            int step,
+            String eventType,
+            long actors,
+            double conversionFromPrevious,
+            double conversionFromFirst,
+            Double medianSecondsFromPrevious) {
+    }
+
+    /**
+     * @param conversionWindow the bound each actor had to finish in, from their
+     *                         first step
+     * @param overallConversion share of entrants who completed every step
+     */
+    public record Funnel(
+            Instant from,
+            Instant to,
+            String conversionWindow,
+            long entered,
+            long completed,
+            double overallConversion,
+            List<FunnelStep> steps) {
     }
 }

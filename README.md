@@ -83,7 +83,8 @@ repeatable `filter`.
 |---|---|
 | `GET /api/v1/analytics/timeseries` | Counts per `hour`/`day`/`week`/`month` bucket |
 | `GET /api/v1/analytics/breakdown` | Top groups by `eventType` or `metadata.<key>` |
-| `GET /api/v1/analytics/summary` | Totals, distinct types, first and last event |
+| `GET /api/v1/analytics/summary` | Totals, unique people, distinct types, first and last event |
+| `GET /api/v1/analytics/funnel` | Ordered conversion funnel over distinct people |
 | `GET /api/v1/events` | Paginated raw events |
 | `GET /api/v1/event-types` | Every event type sent, with counts |
 
@@ -95,6 +96,52 @@ exclusive. A `day` bucket is a UTC midnight-to-midnight day wherever the service
 runs, so the same query returns the same answer from a laptop and from a
 deployment. Per-tenant reporting timezones are not supported yet; a client
 wanting local days should request `hour` buckets and roll them up.
+
+### Identity
+
+Events carry two optional identifiers, and both are your values, not ours:
+
+- **`userId`** your own identifier for the person, set once they authenticate.
+  Stored verbatim and scoped to your organization, so it can never collide with
+  another tenant's. Any string: bigints, ULIDs and `auth0|abc123` all work.
+- **`anonymousId`** a client-generated id that covers logged-out traffic.
+
+Both may be absent. A billing webhook or a cron run has neither, and those
+events are simply excluded from per-person questions rather than merged into a
+phantom actor.
+
+**Keep sending `anonymousId` after login.** That overlap is the only record
+linking someone's anonymous history to their account, it makes the mapping
+derivable from the rows themselves with no separate identify call, and it cannot
+be reconstructed later if it was never written. Without it, every funnel that
+crosses sign-in breaks exactly where it matters.
+
+Sessions are deliberately not stored. A session is a gap in time, better derived
+at query time than trusted from a client.
+
+### Funnels
+
+```bash
+curl "localhost:8080/api/v1/analytics/funnel\
+?step=page_view&step=signup&step=purchase&window=7d" -H "X-API-Key: $KEY"
+```
+
+Steps are matched **in order, first occurrence, per person**. A step only counts
+when it happens after the previous one for that same actor, so someone who
+purchased and later viewed the page is not a conversion. Repeating a step does
+not let anyone count twice.
+
+`window` bounds how long someone has to finish, measured from their **first**
+step rather than the previous one, so an N-step funnel cannot quietly allow N
+times the window. Defaults to `7d`; accepts `30m`, `24h`, `7d`.
+
+Each step reports the actors who reached it, conversion from the previous step
+and from the top, and the median time taken.
+
+Anonymous history is stitched to the account it became, so a funnel spanning
+sign-in counts one person rather than two. The mapping is scoped to the query
+window: someone who identified before it is only stitched if they also appear
+inside it.
 
 ### Metadata filtering
 

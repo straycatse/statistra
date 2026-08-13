@@ -3,6 +3,7 @@ package com.straycat.statistra.controller;
 import com.straycat.statistra.dto.query.QueryResponses.Breakdown;
 import com.straycat.statistra.dto.query.QueryResponses.EventPage;
 import com.straycat.statistra.dto.query.QueryResponses.EventTypeEntry;
+import com.straycat.statistra.dto.query.QueryResponses.Funnel;
 import com.straycat.statistra.dto.query.QueryResponses.Summary;
 import com.straycat.statistra.dto.query.QueryResponses.TimeSeries;
 import com.straycat.statistra.entity.Organization;
@@ -94,6 +95,28 @@ public class QueryController {
 
         return queryService.events(
                 organization.getId(), from, to, eventType, filter, limit, offset);
+    }
+
+    /**
+     * Ordered conversion funnel.
+     *
+     * <p>Example:
+     * {@code /api/v1/analytics/funnel?step=page_view&step=signup&step=purchase&window=7d}
+     *
+     * <p>Steps are matched in the order given and each actor is counted once
+     * per step. {@code window} bounds how long someone has to finish, measured
+     * from their first step, and defaults to 7d.
+     */
+    @GetMapping("/analytics/funnel")
+    public Funnel funnel(
+            @CurrentOrganization Organization organization,
+            @RequestParam List<String> step,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+            @RequestParam(required = false) String window,
+            @RequestParam(required = false) List<String> filter) {
+
+        return queryService.funnel(organization.getId(), from, to, step, window, filter);
     }
 
     @GetMapping("/event-types")

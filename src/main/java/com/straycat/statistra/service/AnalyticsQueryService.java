@@ -2,12 +2,14 @@ package com.straycat.statistra.service;
 
 import com.straycat.statistra.dao.AnalyticsQueryDao;
 import com.straycat.statistra.dto.query.BreakdownDimension;
+import com.straycat.statistra.dto.query.FunnelSpec;
 import com.straycat.statistra.dto.query.MetadataFilter;
 import com.straycat.statistra.dto.query.QueryResponses.Breakdown;
 import com.straycat.statistra.dto.query.QueryResponses.BreakdownEntry;
 import com.straycat.statistra.dto.query.QueryResponses.EventPage;
 import com.straycat.statistra.dto.query.QueryResponses.EventTypeEntry;
 import com.straycat.statistra.dto.query.QueryResponses.EventView;
+import com.straycat.statistra.dto.query.QueryResponses.Funnel;
 import com.straycat.statistra.dto.query.QueryResponses.Summary;
 import com.straycat.statistra.dto.query.QueryResponses.TimeSeries;
 import com.straycat.statistra.dto.query.QueryResponses.TimeSeriesPoint;
@@ -110,6 +112,19 @@ public class AnalyticsQueryService {
 
         return new EventPage(page, effectiveLimit, effectiveOffset,
                 hasMore ? effectiveOffset + effectiveLimit : null);
+    }
+
+    @Transactional(readOnly = true)
+    public Funnel funnel(long organizationId,
+                         Instant from,
+                         Instant to,
+                         List<String> steps,
+                         String window,
+                         List<String> filters) {
+
+        Range range = Range.of(from, to);
+        return dao.funnel(organizationId, range.from(), range.to(),
+                FunnelSpec.of(steps, window), MetadataFilter.parse(filters));
     }
 
     @Transactional(readOnly = true)
